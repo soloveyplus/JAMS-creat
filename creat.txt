@@ -245,7 +245,7 @@ init() {
     LOG_FILE="/var/log/iptables.log"
     touch $LOG_FILE
     chmod 640 $LOG_FILE
-    chown root:adm $LOG_FILE
+    chown syslog:syslog $LOG_FILE
 
     # Добавление конфигурации rsyslog
     RSYSLOG_CONF="/etc/rsyslog.d/iptables.conf"
