@@ -1,2 +1,304 @@
-# JAMS-creat
-Установка JAMS сервера 
+Установка JAMS сервера
+
+UBUNTU "22.04"
+
+apt update
+apt upgrade
+apt install iptables
+apt install rsyslog
+apt-get install iptables-persistent
+systemctl status netfilter-persistent
+chown syslog:syslog iptables.log
+mkdir /opt/jams
+cd  /opt/jams
+wget https://dl.jami.net/jams/jams.tar
+tar -xf jams.tar
+apt install openjdk-21-jre openjdk-21-jre-headless
+java -version
+apt install certbot
+certbot certonly --standalone -d jam.gopa.ru
+apt install nginx
+openssl dhparam -out /etc/ssl/certs/dh.pem 2048
+nano /etc/systemd/system/jams.service
+
+--------------------------------------------
+[Unit]
+Description=JAMS Server
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jam/jams
+ExecStart=/usr/bin/java -jar /opt/jams/jams-launcher.jar
+
+[Install]
+WantedBy=multi-user.target
+
+
+______________________________________________
+systemctl daemon-reload
+systemctl start jams
+
+nano /etc/nginx/conf.d/proxy.conf
+
+-------------------------------------------------
+
+
+server {
+    listen 80;
+    server_name jm.gopa.ru;
+    return 301 https://$host$request_uri;
+}
+
+
+server {
+    listen 443 ssl;
+    server_name jm.gopa.ru;
+
+    access_log /var/log/nginx/jm.gopa.ru-ssl-access.log;
+    error_log /var/log/nginx/jm.gopa.ru-ssl-error.log;
+
+
+    client_body_timeout 5s;
+    client_header_timeout 5s;
+
+
+    ssl_certificate /etc/letsencrypt/live/jm.gopa.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/jm.gopa.ru/privkey.pem;
+    ssl_session_timeout 5m;
+    ssl_protocols TLSv1 TLSv1.1 TLSv1.2;
+    ssl_ciphers 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA>
+    ssl_dhparam /etc/ssl/certs/dh.pem;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+
+    #Добавляем самоподписанный CA
+    ssl_client_certificate /opt/jam/jams/CA.pem;
+    ssl_verify_client optional;
+
+
+
+location / {
+    # Block client-supplied headers that could be used to spoof
+    #if ($http_x_client_cert) {
+    #  return 400;
+    #}
+    proxy_pass        http://127.0.0.1:8080;
+    proxy_set_header  X-Real-IP $remote_addr;
+    proxy_set_header  Host $http_host;
+    proxy_set_header  X-Client-Cert $ssl_client_escaped_cert;
+  }
+
+
+
+}
+
+______________________________________________________________________
+
+nginx -t
+systemctl start nginx
+
+Конфиг rc.fw для пароноика:
+___________________________________________________________________
+
+#!/bin/bash
+
+#### Проверка прав доступа
+if [[ $EUID -ne 0 ]]; then
+   echo "Этот скрипт должен выполняться с правами root"
+   exit 1
+fi
+
+##### Определение путей к командам
+IPT=/sbin/iptables
+IPTR=/sbin/iptables-restore
+IPTS=/sbin/iptables-save
+IP6T=/sbin/ip6tables
+IP6TR=/sbin/ip6tables-restore
+IP6TS=/sbin/ip6tables-save
+
+##### Функция сброса правил
+reset() {
+    echo "Сброс правил брандмауэра..."
+
+    # Очистка всех цепочек для IPv4
+    $IPT -F
+    $IPT -t nat -F
+    $IPT -t mangle -F
+
+    # Очистка всех цепочек для IPv6
+    $IP6T -F
+    $IP6T -t nat -F
+    $IP6T -t mangle -F
+
+    # Установка политики по умолчанию для IPv4
+    $IPT -P INPUT DROP
+    $IPT -P FORWARD DROP
+    $IPT -P OUTPUT DROP
+
+    # Установка политики по умолчанию для IPv6
+    $IP6T -P INPUT DROP
+    $IP6T -P FORWARD DROP
+    $IP6T -P OUTPUT DROP
+
+    # Блокировка недействительных пакетов для IPv4
+    $IPT -A INPUT -m state --state INVALID -j LOG --log-prefix "FW-DROP-INVALID: " --log-level 4
+    $IPT -A INPUT -m state --state INVALID -j DROP
+    $IPT -A FORWARD -m state --state INVALID -j LOG --log-prefix "FW-DROP-INVALID: " --log-level 4
+    $IPT -A FORWARD -m state --state INVALID -j DROP
+    $IPT -A OUTPUT -m state --state INVALID -j LOG --log-prefix "FW-DROP-INVALID: " --log-level 4
+    $IPT -A OUTPUT -m state --state INVALID -j DROP
+
+    # Блокировка всех пакетов для IPv6
+    $IP6T -A INPUT -j LOG --log-prefix "FW-DROP-IPV6: " --log-level 4
+    $IP6T -A INPUT -j DROP
+    $IP6T -A FORWARD -j LOG --log-prefix "FW-DROP-IPV6: " --log-level 4
+    $IP6T -A FORWARD -j DROP
+    $IP6T -A OUTPUT -j LOG --log-prefix "FW-DROP-IPV6: " --log-level 4
+    $IP6T -A OUTPUT -j DROP
+
+    # Разрешение уже установленных соединений для IPv4
+    $IPT -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $IPT -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $IPT -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    # Разрешение локального трафика для IPv4
+    $IPT -A INPUT -i lo -j ACCEPT
+    $IPT -A OUTPUT -o lo -j ACCEPT
+
+    echo "Правила брандмауэра сброшены."
+}
+
+######  Функция инициализации правил
+init() {
+    echo "Инициализация брандмауэра..."
+
+    reset
+
+    # Отключение IPv6 на уровне ядра
+    echo "Отключение IPv6..."
+    sysctl -w net.ipv6.conf.all.disable_ipv6=1
+    sysctl -w net.ipv6.conf.default.disable_ipv6=1
+    sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+
+    # Защита от сканирования портов для IPv4
+    $IPT -A INPUT -p tcp --tcp-flags ALL NONE -j LOG --log-prefix "FW-DROP-SCAN: " --log-level 4
+    $IPT -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+    $IPT -A INPUT -p tcp --tcp-flags ALL ALL -j LOG --log-prefix "FW-DROP-SCAN: " --log-level 4
+    $IPT -A INPUT -p tcp --tcp-flags ALL ALL -j DROP
+    $IPT -A INPUT -p tcp --tcp-flags SYN,FIN SYN,FIN -j LOG --log-prefix "FW-DROP-SCAN: " --log-level 4
+    $IPT -A INPUT -p tcp --tcp-flags SYN,FIN SYN,FIN -j DROP
+    $IPT -A INPUT -p tcp --tcp-flags SYN,RST SYN,RST -j LOG --log-prefix "FW-DROP-SCAN: " --log-level 4
+    $IPT -A INPUT -p tcp --tcp-flags SYN,RST SYN,RST -j DROP
+
+    # Защита от спуфинга для IPv4
+    $IPT -A INPUT -s 10.0.0.0/8 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 10.0.0.0/8 -j DROP
+    $IPT -A INPUT -s 172.16.0.0/12 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 172.16.0.0/12 -j DROP
+    $IPT -A INPUT -s 192.168.0.0/16 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 192.168.0.0/16 -j DROP
+    $IPT -A INPUT -s 127.0.0.0/8 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 127.0.0.0/8 -j DROP
+    $IPT -A INPUT -s 0.0.0.0/8 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 0.0.0.0/8 -j DROP
+    $IPT -A INPUT -s 240.0.0.0/5 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 240.0.0.0/5 -j DROP
+    $IPT -A INPUT -s 169.254.0.0/16 -j LOG --log-prefix "FW-DROP-SPOOF: " --log-level 4
+    $IPT -A INPUT -s 169.254.0.0/16 -j DROP
+
+    # Полное отключение ICMP для IPv4
+    $IPT -A INPUT -p icmp -j LOG --log-prefix "FW-DROP-ICMP: " --log-level 4
+    $IPT -A INPUT -p icmp -j DROP
+    $IPT -A OUTPUT -p icmp -j LOG --log-prefix "FW-DROP-ICMP: " --log-level 4
+    $IPT -A OUTPUT -p icmp -j DROP
+
+    # Разрешение SSH только с определенного IP-адреса
+    TRUSTED_SSH_IP="мой_IP"
+    $IPT -A INPUT -p tcp -s $TRUSTED_SSH_IP --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
+    $IPT -A OUTPUT -p tcp --sport 22 -d $TRUSTED_SSH_IP -m state --state ESTABLISHED -j ACCEPT
+
+    # Разрешение HTTP/HTTPS
+    $IPT -A INPUT -p tcp --dport 80 -j ACCEPT
+    $IPT -A INPUT -p tcp --dport 443 -j ACCEPT
+    $IPT -A OUTPUT -p tcp --sport 80 -m state --state ESTABLISHED -j ACCEPT
+    $IPT -A OUTPUT -p tcp --sport 443 -m state --state ESTABLISHED -j ACCEPT
+
+
+    # Разрешение DNS (UDP 53) для исходящего трафика
+    $IPT -A OUTPUT -p udp --dport 53 -j ACCEPT
+    $IPT -A OUTPUT -p tcp --dport 53 -j ACCEPT
+
+    # Разрешение NTP (UDP 123) для синхронизации времени
+    $IPT -A OUTPUT -p udp --dport 123 -j ACCEPT
+
+    # Сохранение правил для IPv4
+    if [ -x "$IPTS" ]; then
+        $IPTS > /etc/iptables/rules.v4
+        echo "Правила IPv4 успешно сохранены."
+    else
+        echo "Ошибка: команда iptables-save не найдена."
+        exit 1
+    fi
+
+    # Сохранение правил для IPv6
+    if [ -x "$IP6TS" ]; then
+        $IP6TS > /etc/iptables/rules.v6
+        echo "Правила IPv6 успешно сохранены."
+    else
+        echo "Ошибка: команда ip6tables-save не найдена."
+        exit 1
+    fi
+
+    # Настройка rsyslog для записи логов в отдельный файл
+    echo "Настройка rsyslog для записи логов брандмауэра..."
+    LOG_FILE="/var/log/iptables.log"
+    touch $LOG_FILE
+    chmod 640 $LOG_FILE
+    chown root:adm $LOG_FILE
+
+    # Добавление конфигурации rsyslog
+    RSYSLOG_CONF="/etc/rsyslog.d/iptables.conf"
+    echo ":msg, contains, \"FW-DROP\" -${LOG_FILE}" > $RSYSLOG_CONF
+    echo "& stop" >> $RSYSLOG_CONF
+
+    # Перезапуск rsyslog
+    systemctl restart rsyslog
+
+    echo "Брандмауэр успешно инициализирован."
+}
+
+#### Обработка аргументов командной строки
+case $1 in
+    reset)
+        reset
+        ;;
+    init)
+        init
+        ;;
+    *)
+        echo "Использование: $0 {reset|init}"
+        exit 1
+        ;;
+esac
+
+_________________________________________________________________________
+
+
+./rc.fw init
+
+Всё!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
