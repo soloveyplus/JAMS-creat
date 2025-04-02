@@ -9,19 +9,33 @@ apt upgrade
 apt install iptables
 
 apt install rsyslog
+
 apt-get install iptables-persistent
+
 systemctl status netfilter-persistent
+
 chown syslog:syslog iptables.log
+
 mkdir /opt/jams
+
 cd  /opt/jams
+
 wget https://dl.jami.net/jams/jams.tar
+
 tar -xf jams.tar
+
 apt install openjdk-21-jre openjdk-21-jre-headless
+
 java -version
+
 apt install certbot
+
 certbot certonly --standalone -d jam.gopa.ru
+
 apt install nginx
+
 openssl dhparam -out /etc/ssl/certs/dh.pem 2048
+
 nano /etc/systemd/system/jams.service
 
 --------------------------------------------
@@ -98,6 +112,7 @@ location / {
 ______________________________________________________________________
 
 nginx -t
+
 systemctl start nginx
 
 Конфиг rc.fw для пароноика:
