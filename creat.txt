@@ -8,6 +8,7 @@ apt install iptables
 apt install rsyslog
 apt-get install iptables-persistent
 systemctl status netfilter-persistent
+touch /var/log/iptables.log
 chown syslog:syslog /var/log/iptables.log
 mkdir /opt/jams
 cd  /opt/jams
