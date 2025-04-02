@@ -1,2 +1,2 @@
 # JAMS-creat
-JAMS
+Установка JAMS сервера 
