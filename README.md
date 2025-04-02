@@ -3,8 +3,11 @@
 UBUNTU "22.04"
 
 apt update
+
 apt upgrade
+
 apt install iptables
+
 apt install rsyslog
 apt-get install iptables-persistent
 systemctl status netfilter-persistent
